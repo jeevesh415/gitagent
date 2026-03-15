@@ -29,6 +29,7 @@ export interface SkillMetadata {
   name: string;
   description: string;
   license?: string;
+  allowedTools?: string[];
   directory: string;
 }
 
@@ -79,11 +80,13 @@ export function loadSkillMetadata(filePath: string): SkillMetadata {
   }
 
   const fm = yaml.load(frontmatterMatch[1]) as SkillFrontmatter;
+  const tools = getAllowedTools(fm);
 
   return {
     name: fm.name,
     description: fm.description,
     license: fm.license,
+    allowedTools: tools.length > 0 ? tools : undefined,
     directory: join(filePath, '..'),
   };
 }

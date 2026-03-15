@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import yaml from 'js-yaml';
 import { loadAgentManifest, loadFileIfExists } from '../utils/loader.js';
-import { loadAllSkills, getAllowedTools } from '../utils/skill-loader.js';
+import { loadAllSkillMetadata } from '../utils/skill-loader.js';
 
 export function exportToClaudeCode(dir: string): string {
   const agentDir = resolve(dir);
@@ -32,20 +32,19 @@ export function exportToClaudeCode(dir: string): string {
     parts.push(duty);
   }
 
-  // Skills — loaded via skill-loader
+  // Skills — loaded via skill-loader (metadata only for progressive disclosure)
   const skillsDir = join(agentDir, 'skills');
-  const skills = loadAllSkills(skillsDir);
+  const skills = loadAllSkillMetadata(skillsDir);
   if (skills.length > 0) {
     const skillParts: string[] = ['## Skills\n'];
     for (const skill of skills) {
-      skillParts.push(`### ${skill.frontmatter.name}`);
-      skillParts.push(skill.frontmatter.description);
-      const tools = getAllowedTools(skill.frontmatter);
-      if (tools.length > 0) {
-        skillParts.push(`Allowed tools: ${tools.join(', ')}`);
+      const skillDirName = skill.directory.split('/').pop()!;
+      skillParts.push(`### ${skill.name}`);
+      skillParts.push(skill.description);
+      if (skill.allowedTools && skill.allowedTools.length > 0) {
+        skillParts.push(`Allowed tools: ${skill.allowedTools.join(', ')}`);
       }
-      skillParts.push('');
-      skillParts.push(skill.instructions);
+      skillParts.push(`Full instructions: \`skills/${skillDirName}/SKILL.md\``);
       skillParts.push('');
     }
     parts.push(skillParts.join('\n'));
