@@ -6,3 +6,4 @@ export { exportToOpenClawString, exportToOpenClaw } from './openclaw.js';
 export { exportToNanobotString, exportToNanobot } from './nanobot.js';
 export { exportToCopilotString, exportToCopilot } from './copilot.js';
 export { exportToOpenCodeString, exportToOpenCode } from './opencode.js';
+export { exportToGeminiString, exportToGemini } from './gemini.js';
