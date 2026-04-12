@@ -236,7 +236,7 @@ See [`examples/nvidia-deep-researcher/`](examples/nvidia-deep-researcher/) for t
 
 ```bash
 # Install
-npm install -g gitagent
+npm i @open-gitagent/gitagent
 
 # Create a new agent
 gitagent init --template standard
@@ -357,8 +357,10 @@ Adapters are used by both `export` and `run`. Available adapters:
 | `github` | GitHub Actions agent |
 | `git` | Git-native execution (run only) |
 | `opencode` | OpenCode instructions + config |
+| `gemini` | Google Gemini CLI (GEMINI.md + settings.json) |
 | `openclaw` | OpenClaw format |
 | `nanobot` | Nanobot format |
+| `cursor` | Cursor `.cursor/rules/*.mdc` files |
 
 ```bash
 # Export to system prompt

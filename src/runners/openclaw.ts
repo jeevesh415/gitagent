@@ -20,25 +20,60 @@ export function runWithOpenClaw(agentDir: string, manifest: AgentManifest, optio
   const workspaceDir = join(tmpdir(), `gitagent-openclaw-${randomBytes(4).toString('hex')}`);
   mkdirSync(workspaceDir, { recursive: true });
 
-  // Write workspace files
-  writeFileSync(join(workspaceDir, 'AGENTS.md'), exp.agentsMd, 'utf-8');
-  writeFileSync(join(workspaceDir, 'SOUL.md'), exp.soulMd, 'utf-8');
+  const hasSubAgents = exp.subAgents.length > 0;
+
+  // Write main workspace files
+  const mainWorkspace = hasSubAgents ? join(workspaceDir, `workspace-main`) : workspaceDir;
+  mkdirSync(mainWorkspace, { recursive: true });
+
+  writeFileSync(join(mainWorkspace, 'AGENTS.md'), exp.agentsMd, 'utf-8');
+  writeFileSync(join(mainWorkspace, 'SOUL.md'), exp.soulMd, 'utf-8');
 
   if (exp.toolsMd) {
-    writeFileSync(join(workspaceDir, 'TOOLS.md'), exp.toolsMd, 'utf-8');
+    writeFileSync(join(mainWorkspace, 'TOOLS.md'), exp.toolsMd, 'utf-8');
   }
 
-  // Write skills
+  // Write main skills
   for (const skill of exp.skills) {
-    const skillDir = join(workspaceDir, 'skills', skill.name);
+    const skillDir = join(mainWorkspace, 'skills', skill.name);
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(skillDir, 'SKILL.md'), skill.content, 'utf-8');
   }
 
-  // Write openclaw.json config, pointing workspace to our temp dir
+  // Write sub-agent workspaces
+  for (const sub of exp.subAgents) {
+    const subWorkspace = join(workspaceDir, `workspace-${sub.name}`);
+    mkdirSync(subWorkspace, { recursive: true });
+
+    writeFileSync(join(subWorkspace, 'SOUL.md'), sub.soulMd, 'utf-8');
+    writeFileSync(join(subWorkspace, 'AGENTS.md'), sub.agentsMd, 'utf-8');
+    if (sub.toolsMd) {
+      writeFileSync(join(subWorkspace, 'TOOLS.md'), sub.toolsMd, 'utf-8');
+    }
+    for (const skill of sub.skills) {
+      const skillDir = join(subWorkspace, 'skills', skill.name);
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), skill.content, 'utf-8');
+    }
+    info(`  Sub-agent workspace: workspace-${sub.name}/`);
+  }
+
+  // Write openclaw.json config, pointing workspaces to temp dirs
   const config = exp.config as Record<string, Record<string, unknown>>;
-  config.agent = config.agent ?? {};
-  config.agent.workspace = workspaceDir;
+  if (hasSubAgents) {
+    const agents = config.agents as Record<string, unknown>;
+    if (agents.main && typeof agents.main === 'object') {
+      (agents.main as Record<string, unknown>).workspace = mainWorkspace;
+    }
+    for (const sub of exp.subAgents) {
+      if (agents[sub.name] && typeof agents[sub.name] === 'object') {
+        (agents[sub.name] as Record<string, unknown>).workspace = join(workspaceDir, `workspace-${sub.name}`);
+      }
+    }
+  } else {
+    config.agent = config.agent ?? {};
+    config.agent.workspace = workspaceDir;
+  }
 
   const configFile = join(workspaceDir, 'openclaw.json');
   writeFileSync(configFile, JSON.stringify(config, null, 2), 'utf-8');
@@ -83,10 +118,11 @@ export function runWithOpenClaw(agentDir: string, manifest: AgentManifest, optio
     if (result.error) {
       error(`Failed to launch OpenClaw: ${result.error.message}`);
       info('Make sure OpenClaw is installed: npm install -g openclaw@latest');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
 
-    process.exit(result.status ?? 0);
+    process.exitCode = result.status ?? 0;
   } finally {
     // Cleanup temp workspace
     try { rmSync(workspaceDir, { recursive: true, force: true }); } catch { /* ignore */ }

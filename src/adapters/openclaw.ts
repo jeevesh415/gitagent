@@ -15,12 +15,21 @@ import { loadAllSkills, getAllowedTools } from '../utils/skill-loader.js';
  *   - TOOLS.md       (tool definitions)
  *   - skills/<name>/SKILL.md (skill files, passed through)
  */
+export interface SubAgentExport {
+  name: string;
+  soulMd: string;
+  agentsMd: string;
+  toolsMd: string;
+  skills: Array<{ name: string; content: string }>;
+}
+
 export interface OpenClawExport {
   config: object;
   agentsMd: string;
   soulMd: string;
   toolsMd: string;
   skills: Array<{ name: string; content: string }>;
+  subAgents: SubAgentExport[];
 }
 
 export function exportToOpenClaw(dir: string): OpenClawExport {
@@ -42,7 +51,10 @@ export function exportToOpenClaw(dir: string): OpenClawExport {
   // --- Skills (passthrough SKILL.md files) ---
   const skills = collectSkills(agentDir);
 
-  return { config, agentsMd, soulMd, toolsMd, skills };
+  // --- Sub-agents (separate workspaces) ---
+  const subAgents = exportSubAgents(agentDir, manifest);
+
+  return { config, agentsMd, soulMd, toolsMd, skills, subAgents };
 }
 
 /**
@@ -52,40 +64,99 @@ export function exportToOpenClaw(dir: string): OpenClawExport {
 export function exportToOpenClawString(dir: string): string {
   const exp = exportToOpenClaw(dir);
   const parts: string[] = [];
+  const hasSubAgents = exp.subAgents.length > 0;
+  const mainPrefix = hasSubAgents ? `workspace-${exp.config && (exp.config as Record<string, Record<string, string[]>>).agents?.list?.[0] || 'main'}` : 'workspace';
 
   parts.push('# === openclaw.json ===');
   parts.push(JSON.stringify(exp.config, null, 2));
 
-  parts.push('\n# === workspace/AGENTS.md ===');
+  parts.push(`\n# === ${mainPrefix}/AGENTS.md ===`);
   parts.push(exp.agentsMd);
 
-  parts.push('\n# === workspace/SOUL.md ===');
+  parts.push(`\n# === ${mainPrefix}/SOUL.md ===`);
   parts.push(exp.soulMd);
 
   if (exp.toolsMd) {
-    parts.push('\n# === workspace/TOOLS.md ===');
+    parts.push(`\n# === ${mainPrefix}/TOOLS.md ===`);
     parts.push(exp.toolsMd);
   }
 
   for (const skill of exp.skills) {
-    parts.push(`\n# === workspace/skills/${skill.name}/SKILL.md ===`);
+    parts.push(`\n# === ${mainPrefix}/skills/${skill.name}/SKILL.md ===`);
     parts.push(skill.content);
+  }
+
+  // Sub-agent workspaces
+  for (const sub of exp.subAgents) {
+    const prefix = `workspace-${sub.name}`;
+
+    parts.push(`\n# === ${prefix}/SOUL.md ===`);
+    parts.push(sub.soulMd);
+
+    parts.push(`\n# === ${prefix}/AGENTS.md ===`);
+    parts.push(sub.agentsMd);
+
+    if (sub.toolsMd) {
+      parts.push(`\n# === ${prefix}/TOOLS.md ===`);
+      parts.push(sub.toolsMd);
+    }
+
+    for (const skill of sub.skills) {
+      parts.push(`\n# === ${prefix}/skills/${skill.name}/SKILL.md ===`);
+      parts.push(skill.content);
+    }
   }
 
   return parts.join('\n');
 }
 
 function buildOpenClawConfig(agentDir: string, manifest: ReturnType<typeof loadAgentManifest>): object {
+  const mainModel = mapModelName(manifest.model?.preferred ?? 'anthropic/claude-sonnet-4-5-20250929');
+
+  // Check for sub-agents → multi-agent config
+  if (manifest.agents && Object.keys(manifest.agents).length > 0) {
+    const agentNames = ['main', ...Object.keys(manifest.agents)];
+    const agents: Record<string, unknown> = {
+      list: agentNames,
+      main: buildAgentConfig(mainModel, `~/.openclaw/workspace-${manifest.name}`, manifest),
+    };
+
+    for (const name of Object.keys(manifest.agents)) {
+      const subDir = join(agentDir, 'agents', name);
+      let subModel = mainModel;
+      if (existsSync(join(subDir, 'agent.yaml'))) {
+        try {
+          const subManifest = loadAgentManifest(subDir);
+          if (subManifest.model?.preferred) {
+            subModel = mapModelName(subManifest.model.preferred);
+          }
+        } catch { /* use parent model */ }
+      }
+      agents[name] = {
+        model: subModel,
+        workspace: `~/.openclaw/workspace-${name}`,
+      };
+    }
+
+    return { agents };
+  }
+
+  // Single-agent config (unchanged)
   const config: Record<string, unknown> = {
-    agent: {
-      model: mapModelName(manifest.model?.preferred ?? 'anthropic/claude-sonnet-4-5-20250929'),
-      workspace: '~/.openclaw/workspace',
-    },
+    agent: buildAgentConfig(mainModel, '~/.openclaw/workspace', manifest),
   };
 
-  // Map runtime settings
+  return config;
+}
+
+function buildAgentConfig(
+  model: string,
+  workspace: string,
+  manifest: ReturnType<typeof loadAgentManifest>,
+): Record<string, unknown> {
+  const agentConfig: Record<string, unknown> = { model, workspace };
+
   if (manifest.runtime) {
-    const agentConfig = config.agent as Record<string, unknown>;
     if (manifest.runtime.temperature !== undefined) {
       agentConfig.temperature = manifest.runtime.temperature;
     }
@@ -94,12 +165,11 @@ function buildOpenClawConfig(agentDir: string, manifest: ReturnType<typeof loadA
     }
   }
 
-  // Map model constraints
   if (manifest.model?.constraints?.max_tokens) {
-    (config.agent as Record<string, unknown>).maxTokens = manifest.model.constraints.max_tokens;
+    agentConfig.maxTokens = manifest.model.constraints.max_tokens;
   }
 
-  return config;
+  return agentConfig;
 }
 
 /**
@@ -244,6 +314,32 @@ function buildToolsMd(agentDir: string): string {
   }
 
   return parts.join('\n');
+}
+
+function exportSubAgents(
+  agentDir: string,
+  manifest: ReturnType<typeof loadAgentManifest>,
+): SubAgentExport[] {
+  if (!manifest.agents) return [];
+
+  const subAgents: SubAgentExport[] = [];
+
+  for (const name of Object.keys(manifest.agents)) {
+    const subDir = join(agentDir, 'agents', name);
+    if (!existsSync(subDir)) continue;
+
+    try {
+      const subManifest = loadAgentManifest(subDir);
+      const soulMd = loadFileIfExists(join(subDir, 'SOUL.md')) ?? `# ${subManifest.name}\n${subManifest.description}`;
+      const agentsMd = buildAgentsMd(subDir, subManifest);
+      const toolsMd = buildToolsMd(subDir);
+      const skills = collectSkills(subDir);
+
+      subAgents.push({ name, soulMd, agentsMd, toolsMd, skills });
+    } catch { /* skip malformed sub-agents */ }
+  }
+
+  return subAgents;
 }
 
 function collectSkills(agentDir: string): Array<{ name: string; content: string }> {
